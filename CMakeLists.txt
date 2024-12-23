@@ -35,8 +35,8 @@ if (MEMORANDUM_BUILD_TESTS)
 
     set(TEST_SOURCE_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/tests)
     set(TEST_SOURCES
-    ${TEST_SOURCE_DIR}/01_basic.cpp
-
+        ${TEST_SOURCE_DIR}/01_basic.cpp
+        ${TEST_SOURCE_DIR}/10_index.cpp
     )
     message("test sources = ${TEST_SOURCES}")
 
