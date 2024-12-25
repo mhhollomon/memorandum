@@ -98,7 +98,6 @@ private :
 
         iterator_return_type & operator*() const {
             return ptr_->rows[slot_].kv;
-            //std::make_pair(std::as_const(oid_type(ptr_->rows[slot_].oid)), ptr_->rows[slot_].value);
         }
 
         iterator_return_type *operator->() const { return &operator*(); }
@@ -164,6 +163,14 @@ private :
         }
 
     };
+
+    struct _index_ref {
+        _index_base *idx;
+        bool is_multi;
+
+        _index_ref(_index_base *i, bool m) : idx{i}, is_multi{m} {}
+    };
+
 #pragma endregion
 
     /****************************************************
@@ -177,7 +184,8 @@ private :
 
     std::map<oid_type, _row_ref> row_map_;
 
-    std::list<_index_base *> indecies_;
+    std::map<std::string, _index_ref> index_map_;
+
 
     /****************************************************
      * Private Methods
@@ -233,8 +241,8 @@ public :
 
         row_map_.insert({oid, {bucket, this_slot}});
 
-        for(auto &idx : indecies_) {
-            idx->add(oid, value);
+        for(auto &idx : index_map_) {
+            idx.second.idx->add(oid, value);
         }
 
         return iterator{bucket, this_slot};
@@ -250,13 +258,13 @@ public :
         }
 
         auto &r = iter->second.get_row();
-        r.deleted = true;
 
-        row_map_.erase(row_num);
-
-        for(auto &idx : indecies_) {
-            idx->remove(row_num, r.kv.value);
+        for(auto &idx : index_map_) {
+            idx.second.idx->remove(row_num, r.kv.value);
         }
+
+        r.deleted = true;
+        row_map_.erase(row_num);
 
     }
 
@@ -311,25 +319,23 @@ public :
             bucket_head_ = bucket_tail_ = nullptr;
         }
 
-        for (auto iter : indecies_) {
-            auto next = iter+1;
-            delete iter;
-            iter = next;
+        for (auto value : index_map_) {
+            delete value.second.idx;
         }
     }
 
     template<typename IndexType>
-    struct index : public _index_base {
+    struct table_index : public _index_base {
         using accessor_type = std::function<IndexType(const ValueType &)>;
 
-        index(accessor_type accessor, Table *t) : table_{t}, accessor_{accessor} {}
+        table_index(accessor_type accessor, Table *t) : table_{t}, accessor_{accessor} {}
 
-        size_type count() const { return index_map_.size(); }
+        size_type count() const { return index_data_map_.size(); }
 
         iterator find(IndexType const &idx) {
 
-            auto iter = index_map_.find(idx);
-            if (iter == index_map_.end()) {
+            auto iter = index_data_map_.find(idx);
+            if (iter == index_data_map_.end()) {
                 return table_->end();
             } else {
                 return table_->find_(iter->second);
@@ -340,31 +346,117 @@ public :
             accessor_type accessor_;
             Table * table_;
 
-            std::map<IndexType, oid_type> index_map_;
+            std::map<IndexType, oid_type> index_data_map_;
 
             void add(oid_type rowid, const ValueType &v) {
-                index_map_.insert({accessor_(v), rowid});
+                index_data_map_.insert({accessor_(v), rowid});
             }
 
             virtual void remove(oid_type rowid, const ValueType &v) {
-                index_map_.erase(accessor_(v));
-            }
-
-
-            
+                index_data_map_.erase(accessor_(v));
+            }            
 
     };
 
 
     template<typename IT>
-    index<IT> & create_index(index<IT>::accessor_type a) {
-        auto * idx = new index<IT>(a, this);
-        indecies_.insert(indecies_.end(), idx);
+    table_index<IT> & create_index(std::string name, table_index<IT>::accessor_type a) {
+        auto * idx = new table_index<IT>(a, this);
+        index_map_.insert({name, {idx, false}});
+        
+        for (auto & iter : *this) {
+            dynamic_cast<_index_base *>(idx)->add(iter.oid, iter.value);
+        }
 
         return *idx;
     }
 
+    template<typename IndexType>
+    struct table_multi_index : public _index_base {
+        using accessor_type = std::function<IndexType(const ValueType &)>;
 
+        table_multi_index(accessor_type accessor, Table *t) : table_{t}, accessor_{accessor} {}
+
+        size_type count() const { return index_data_map_.size(); }
+
+        iterator find(IndexType const &idx) {
+
+            auto iter = index_data_map_.find(idx);
+            if (iter == index_data_map_.end()) {
+                return table_->end();
+            } else {
+                return table_->find_(iter->second);
+            }
+        }
+
+        private :
+            accessor_type accessor_;
+            Table * table_;
+
+            std::multimap<IndexType, oid_type> index_data_map_;
+
+            void add(oid_type rowid, const ValueType &v) {
+                index_data_map_.insert({accessor_(v), rowid});
+            }
+
+            virtual void remove(oid_type rowid, const ValueType &v) {
+
+                // multiple rows may map to the same key.
+                // So we need to find the one that has the same rowid.
+
+                auto [start, end] = index_data_map_.equal_range(accessor_(v));
+
+                while(start != end) {
+                    if (start->second == rowid) {
+                        index_data_map_.erase(start);
+                        break;
+                    }
+                    ++start;
+                }
+            }            
+
+    };
+
+
+    template<typename IT>
+    table_multi_index<IT> & create_multi_index(std::string name, table_index<IT>::accessor_type a) {
+        auto * idx = new table_multi_index<IT>(a, this);
+        index_map_.insert({name, {idx, true}});
+
+        for (auto & iter : *this) {
+            dynamic_cast<_index_base *>(idx)->add(iter.oid, iter.value);
+        }
+
+        return *idx;
+    }
+
+    template<typename IT>
+    table_index<IT> &index(std::string name) {
+        auto iter = index_map_.find(name);
+        if (iter == index_map_.end()) {
+            throw std::runtime_error("No index named '" + name + "'");
+        }
+
+        if (iter->second.is_multi) {
+            throw std::runtime_error("Index named '" + name + "' is a multi index");
+        }
+
+        return *(dynamic_cast<table_index<IT> *>(iter->second.idx));
+    }
+
+    template<typename IT>
+    table_multi_index<IT> &multi_index(std::string name) {
+        auto iter = index_map_.find(name);
+        if (iter == index_map_.end()) {
+            throw std::runtime_error("No index named '" + name + "'");
+        }
+
+        if (not iter->second.is_multi) {
+            throw std::runtime_error("Index named '" + name + "' is not a multi index");
+        }
+
+        return *(dynamic_cast<table_multi_index<IT> *>(iter->second.idx));
+    }
 
 
 // ------------- END of CLASS Table -------------

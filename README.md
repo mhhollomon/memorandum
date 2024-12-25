@@ -1,6 +1,6 @@
 # memorandum
 
-Toy in-memory database. Currently thin spackling over a linked list.
+Embedded, in-memory database.
 
 Being written for the needs of the [kbDaw](https://github.com/mhhollomon/kbdaw)
 project.
@@ -9,7 +9,16 @@ Requires C++20.
 
 MIT license.
 
-Vaporware.
+## Overview
+
+The idea is that - unlike most databases - the rows are directly stored as C++
+structures (or classes). Doing so would keep from having to have code that continuously
+marshalled and unmarshalled the separate fields into the database.
+
+The drawback, is of course, that joins and projections are not possible.
+
+So, if you want to call this a key-value store rather than a database, that would
+make sense.
 
 
 ## Concurrency

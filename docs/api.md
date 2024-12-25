@@ -31,7 +31,6 @@ iterator end();
 ```cpp
 template<typename IT>
 index<IT> & create_index(index<IT>::accessor_type key_function);
-
 ```
 
 `IT` is the type of the key.
@@ -49,7 +48,7 @@ struct employee {
 
 auto table = Table<employee>{};
 
-auto &id_index = table.create_index<int>([&](const employee &e) { return e.id; });
+auto &id_index = table.create_index<int>("by_id", [&](const employee &e) { return e.id; });
 
 table.insert_row({"Mary", 12});
 
@@ -59,10 +58,16 @@ std::cout << "Id " << iter->value.id << " is " << iter->value.name << "\n";
 ```
 
 The `key_function` can compute whatever it likes, however, it must be stable.
-That is, give the same value, it must compute the same key.
+That is, given the same value, it must compute the same key.
 
-Hold on to the reference that is returned from `create_index` as you can not get
-it again.
+The `Table<>` object owns the index and will clean it up during distruction.
 
-However, the `Table<>` object owns the index and will clean it up during distruction.
+You can retrieve an index by name:
 
+```cpp
+// continued from above
+
+auto iter = table.index<int>("by_id").find(12);
+
+std::cout << "Id " << iter->value.id << " is " << iter->value.name << "\n";
+```
